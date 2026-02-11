@@ -1,6 +1,6 @@
-CC=gcc
-CFLAGS=-Wall -O2
-LDFLAGS=
+CC=icpx
+CFLAGS=-Wall -O2 -I/usr/include/level_zero/ -g
+LDFLAGS=-lmpi -lze_loader
 TARGET=test_vmem
 all: $(TARGET)
 $(TARGET): test_vmem.o ../lib/libvmem.a
