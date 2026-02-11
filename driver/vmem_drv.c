@@ -46,6 +46,10 @@ static ssize_t vmem_write(struct file *file, const char __user *buf, size_t coun
     return to_copy;
 }
 
+static int vmem_match_any(struct device *dev, const void *data)
+{
+    return 1;
+}
 
 static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     // demo: no real ioctl
@@ -62,7 +66,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             int fd = local_ipc_handle.data[0]; // or however the fd is passed
             struct dma_buf *dmabuf = dma_buf_get(fd);
-            struct device *dev = class_find_device(vmem_class, NULL, NULL, NULL);
+            printk(KERN_INFO "dma_buf_get returned %p\n", dmabuf);
+            struct device *dev = class_find_device(vmem_class, NULL, NULL, vmem_match_any);
             if (!dev) {
                 printk(KERN_ERR "Failed to find device for dma_buf_attach\n");
                 return -ENODEV;
