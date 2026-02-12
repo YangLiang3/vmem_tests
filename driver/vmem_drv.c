@@ -49,11 +49,6 @@ static ssize_t vmem_write(struct file *file, const char __user *buf, size_t coun
     return to_copy;
 }
 
-static int vmem_match_any(struct device *dev, const void *data)
-{
-    return 1;
-}
-
 static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     // demo: no real ioctl
     switch (cmd)
@@ -73,33 +68,29 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 return PTR_ERR(dmabuf);
             
             printk(KERN_INFO "dma_buf_get returned %p\n", dmabuf);
-            struct device *dev = class_find_device(vmem_class, NULL, NULL, vmem_match_any);
-            if (!dev) {
-                printk(KERN_ERR "Failed to find device for dma_buf_attach\n");
+
+            struct pci_dev *pdev = pci_get_device(0x8086, 0xe211, NULL); // Intel GPU PCI ID
+            if (!pdev) {
+                // Fallback: try to find any display class device if specific ID fails
+                printk(KERN_ERR "Failed to find specific GPU pci device, trying to find any display class device\n");
+                pdev = pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, NULL);
+            }
+
+            if (!pdev) {
+                printk(KERN_ERR "Failed to find GPU pci device\n");
                 dma_buf_put(dmabuf);
                 return -ENODEV;
             }
-
-            // Error -95 is EOPNOTSUPP. This happens if the device doesn't have a DMA mask.
-            // Virtual devices don't have a dma_mask set by default.
-            if (!dev->dma_mask) {
-                dev->dma_mask = &dev->coherent_dma_mask;
-            }
-            // Set a 64-bit DMA mask so the exporter knows this device supports 64-bit addressing
-            if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64))) {
-                printk(KERN_WARNING "Failed to set 64-bit DMA mask, trying 32-bit\n");
-                if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))) {
-                    printk(KERN_ERR "Failed to set DMA mask\n");
-                    put_device(dev);
-                    dma_buf_put(dmabuf);
-                    return -ENODEV;
-                }
-            }
+            
+            printk(KERN_INFO "Found GPU pci device: %04x:%02x:%02x.%d\n",
+                   pdev->vendor, pdev->bus->number, PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
+            // Use the real GPU device for attachment
+            struct device *dev = &pdev->dev;
 
             struct dma_buf_attachment *attach = dma_buf_attach(dmabuf, dev);
             if (IS_ERR(attach)) {
                 printk(KERN_ERR "Failed to attach dma_buf: %ld\n", PTR_ERR(attach));
-                put_device(dev);
+                pci_dev_put(pdev);
                 dma_buf_put(dmabuf);
                 return PTR_ERR(attach);
             }
@@ -108,7 +99,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             if (IS_ERR(sgt)) {
                 printk(KERN_ERR "Failed to map dma_buf attachment: %ld\n", PTR_ERR(sgt));
                 dma_buf_detach(dmabuf, attach);
-                put_device(dev);
+                pci_dev_put(pdev);
                 dma_buf_put(dmabuf);
                 return PTR_ERR(sgt);
             }
@@ -124,7 +115,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
             dma_buf_detach(dmabuf, attach);
-            put_device(dev);
+            pci_dev_put(pdev);
             dma_buf_put(dmabuf);
 
         }
