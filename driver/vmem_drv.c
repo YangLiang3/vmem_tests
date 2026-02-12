@@ -4,6 +4,9 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/dma-buf.h>
+#include <linux/err.h>
+#include <linux/dma-mapping.h>
+#include <linux/pci.h>
 
 
 #define VMEM_DEV_NAME "vmem"
@@ -66,14 +69,49 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             int fd = local_ipc_handle.data[0]; // or however the fd is passed
             struct dma_buf *dmabuf = dma_buf_get(fd);
+            if (IS_ERR(dmabuf))
+                return PTR_ERR(dmabuf);
+            
             printk(KERN_INFO "dma_buf_get returned %p\n", dmabuf);
             struct device *dev = class_find_device(vmem_class, NULL, NULL, vmem_match_any);
             if (!dev) {
                 printk(KERN_ERR "Failed to find device for dma_buf_attach\n");
+                dma_buf_put(dmabuf);
                 return -ENODEV;
             }
+
+            // Error -95 is EOPNOTSUPP. This happens if the device doesn't have a DMA mask.
+            // Virtual devices don't have a dma_mask set by default.
+            if (!dev->dma_mask) {
+                dev->dma_mask = &dev->coherent_dma_mask;
+            }
+            // Set a 64-bit DMA mask so the exporter knows this device supports 64-bit addressing
+            if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64))) {
+                printk(KERN_WARNING "Failed to set 64-bit DMA mask, trying 32-bit\n");
+                if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))) {
+                    printk(KERN_ERR "Failed to set DMA mask\n");
+                    put_device(dev);
+                    dma_buf_put(dmabuf);
+                    return -ENODEV;
+                }
+            }
+
             struct dma_buf_attachment *attach = dma_buf_attach(dmabuf, dev);
+            if (IS_ERR(attach)) {
+                printk(KERN_ERR "Failed to attach dma_buf: %ld\n", PTR_ERR(attach));
+                put_device(dev);
+                dma_buf_put(dmabuf);
+                return PTR_ERR(attach);
+            }
+
             struct sg_table *sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
+            if (IS_ERR(sgt)) {
+                printk(KERN_ERR "Failed to map dma_buf attachment: %ld\n", PTR_ERR(sgt));
+                dma_buf_detach(dmabuf, attach);
+                put_device(dev);
+                dma_buf_put(dmabuf);
+                return PTR_ERR(sgt);
+            }
 
             struct scatterlist *sg;
             int i = 0;
@@ -86,6 +124,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
             dma_buf_detach(dmabuf, attach);
+            put_device(dev);
             dma_buf_put(dmabuf);
 
         }
