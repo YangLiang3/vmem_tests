@@ -18,12 +18,12 @@ int vmem_read(int fd, char *buf, int len) {
 int vmem_write(int fd, const char *buf, int len) {
     return write(fd, buf, len);
 }
-int vmem_export_handle(int fd, ze_ipc_mem_handle_t* handle) {
+int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle) {
     // pass handle to kernel
     ioctl(fd, 0, handle);
     return 0;
 }
-int vmem_import_handle(int fd) {
+int vmem_get_handle(int fd) {
     // demo: just return the fd as handle
     ioctl(fd, 1, 0);
     return fd;

@@ -199,7 +199,7 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
         printf("rank %d failed to get ipc handle with ret:%d\n", rank ,ret);
     }
 
-    vmem_export_handle(vmem_open(), &local_ipc_handle);
+    vmem_open_handle(vmem_open(), &local_ipc_handle);
  
     memcpy(&local_dma_fd, &local_ipc_handle, sizeof(local_dma_fd));
     send_data.pid = getpid();
