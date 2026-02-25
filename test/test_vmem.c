@@ -22,6 +22,7 @@ ze_event_handle_t event = NULL;
 struct exchange_data {
     int dma_buf_fd;
     int pid;
+    struct pfn_list pfn_list;
 };
  
 #define ERR_PRINT(error_msg_, ...)                                                                 \
@@ -199,11 +200,20 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
         printf("rank %d failed to get ipc handle with ret:%d\n", rank ,ret);
     }
 
-    vmem_open_handle(vmem_open(), &local_ipc_handle);
+    // get the device id
+    int device_id;
+    ze_device_properties_t device_properties = {ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES};
+    zeDeviceGetProperties(*device, &device_properties);
+    device_id = device_properties.deviceId;
+    printf("rank %d device_id: %x\n", rank, device_id);
+
+    struct pfn_list pfn_list = {0};    
+    vmem_open_handle(vmem_open(), &local_ipc_handle, rank, device_id, &pfn_list);
  
     memcpy(&local_dma_fd, &local_ipc_handle, sizeof(local_dma_fd));
     send_data.pid = getpid();
     send_data.dma_buf_fd = local_dma_fd;
+    memcpy(&(send_data.pfn_list), &pfn_list, sizeof(pfn_list));
     MPI_Sendrecv(&send_data, sizeof(send_data), MPI_BYTE,
                 /*dest*/ 1 - rank, 0,
                 &recv_data, sizeof(recv_data), MPI_BYTE,
@@ -234,6 +244,10 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
            rank, fd_for_this_process);
  
     memcpy(&remote_ipc_handle, &fd_for_this_process, sizeof(fd_for_this_process));
+
+    vmem_get_handle(vmem_open(), &remote_ipc_handle, rank, &pfn_list);
+
+    printf("Rank %d new fd for remote ipc handle: %d\n", rank, remote_ipc_handle.data[0]);
  
     ret = zeMemOpenIpcHandle(context,
                             //  devices[(rank +1) % rank_size ],
@@ -327,14 +341,14 @@ int main(int argc, char *argv[])
  
     int copied_data = send_cpu_buf[0];
  
-    l0_memcpy(recv_buf, send_buf, nr_elements * sizeof(int), cl1);
+    l0_memcpy((void *)peer_recv_ptr, send_buf, nr_elements * sizeof(int), cl1);
     
     printf("Rank %d copy local src data to local dst with data %d\n", rank, copied_data);
  
     zeMemCloseIpcHandle(context, (void *)peer_recv_ptr);
-    if (rank == 0) {
+    // if (rank == 0) {
         print_device_buffer(recv_buf, bytes, rank, cl1);
-    }
+    // }
    
  
  

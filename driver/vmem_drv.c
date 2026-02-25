@@ -8,6 +8,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/pci.h>
 #include <linux/dma-resv.h>
+#include <linux/slab.h>
 
 
 #define VMEM_DEV_NAME "vmem"
@@ -21,7 +22,18 @@ typedef struct _ze_ipc_mem_handle_t
 
 } ze_ipc_mem_handle_t;
 
+struct pfn_list {
+    int page_count;
+    unsigned long long addrs[8];
+    size_t size[8];
+};
 
+struct open_handle_data {
+    ze_ipc_mem_handle_t ipc_handle;
+    int rank;
+    int device_id;
+    struct pfn_list pfn_list;
+};
 
 static dev_t vmem_dev;
 static struct cdev vmem_cdev;
@@ -60,6 +72,42 @@ static const struct dma_buf_attach_ops vmem_attach_ops = {
     .move_notify = vmem_move_notify,
 };
 
+struct vmem_dmabuf_priv {
+    struct sg_table *sgt;
+};
+
+static struct sg_table *vmem_map_dma_buf(struct dma_buf_attachment *attachment,
+                                        enum dma_data_direction dir)
+{
+    struct vmem_dmabuf_priv *priv = attachment->dmabuf->priv;
+    printk(KERN_INFO "vmem: vmem_map_dma_buf\n");
+    return priv->sgt;
+}
+
+static void vmem_unmap_dma_buf(struct dma_buf_attachment *attachment,
+                                 struct sg_table *sgt,
+                                 enum dma_data_direction dir)
+{
+    printk(KERN_INFO "vmem: vmem_unmap_dma_buf\n");
+    // Nothing to do here since we are not the ones who allocated the pages
+}
+
+static void vmem_dmabuf_release(struct dma_buf *dmabuf)
+{
+    struct vmem_dmabuf_priv *priv = dmabuf->priv;
+    printk(KERN_INFO "vmem: vmem_dmabuf_release\n");
+    sg_free_table(priv->sgt);
+    kfree(priv->sgt);
+    kfree(priv);
+}
+
+static const struct dma_buf_ops vmem_dmabuf_ops = {
+    .map_dma_buf = vmem_map_dma_buf,
+    .unmap_dma_buf = vmem_unmap_dma_buf,
+    .release = vmem_dmabuf_release,
+};
+
+
 static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     // demo: no real ioctl
     switch (cmd)
@@ -68,12 +116,13 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
         printk(KERN_INFO "vmem ioctl cmd 0\n");
         // get the level zero fd from user and print it in kernel log for demo
         {
-            ze_ipc_mem_handle_t local_ipc_handle;
-            if (copy_from_user(&local_ipc_handle, (ze_ipc_mem_handle_t __user *)arg, sizeof(ze_ipc_mem_handle_t)))
+            struct open_handle_data local_data;
+            if (copy_from_user(&local_data, (struct open_handle_data __user *)arg, sizeof(struct open_handle_data)))
                 return -EFAULT;
-            printk(KERN_INFO "vmem ioctl received fd: %d\n", local_ipc_handle.data[0]);
+            printk(KERN_INFO "vmem ioctl received fd: %d, rank: %d, device_id: %x\n",
+                   local_data.ipc_handle.data[0], local_data.rank, local_data.device_id);
 
-            int fd = local_ipc_handle.data[0]; // or however the fd is passed
+            int fd = local_data.ipc_handle.data[0]; // or however the fd is passed
             struct dma_buf *dmabuf = dma_buf_get(fd);
             if (IS_ERR(dmabuf))
                 return PTR_ERR(dmabuf);
@@ -87,7 +136,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             printk(KERN_INFO "vmem: Looking for compatible VGA device...\n");
 
             // TODO find the right GPU device
-            pdev = pci_get_device(0x8086, 0xe211, NULL); // Intel GPU PCI ID
+            pdev = pci_get_device(0x8086, local_data.device_id, NULL); // Intel GPU PCI ID
             if (!pdev) {
                 // Fallback: try to find any display class device if specific ID fails
                 printk(KERN_ERR "Failed to find specific GPU pci device, trying to find any display class device\n");
@@ -143,7 +192,12 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 phys_addr_t phys = sg_phys(sg);
                 size_t len = sg->length;
                 printk(KERN_INFO "sg %d: phys %pa, len %zu\n", i, &phys, len);
+                if (i < 8) {
+                    local_data.pfn_list.addrs[i] = phys;
+                    local_data.pfn_list.size[i] = len;
+                }
             }
+            local_data.pfn_list.page_count = sgt->nents;
 
             dma_resv_lock(dmabuf->resv, NULL);
             dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
@@ -153,10 +207,86 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             pci_dev_put(pdev);
             dma_buf_put(dmabuf);
 
+            if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data)))
+                return -EFAULT;
         }
         break;
-    case 1: // example command
-        printk(KERN_INFO "vmem ioctl cmd 1\n");
+    case 1: // Create dma_buf from physical addresses
+        {
+            struct open_handle_data local_data;
+            struct vmem_dmabuf_priv *priv;
+            struct dma_buf *dmabuf;
+            struct sg_table *sgt;
+            struct scatterlist *sg;
+            int i, fd;
+
+            printk(KERN_INFO "vmem ioctl cmd 1\n");
+
+            if (copy_from_user(&local_data, (struct open_handle_data __user *)arg, sizeof(struct open_handle_data)))
+                return -EFAULT;
+
+            priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+            if (!priv)
+                return -ENOMEM;
+
+            sgt = kmalloc(sizeof(*sgt), GFP_KERNEL);
+            if (!sgt) {
+                kfree(priv);
+                return -ENOMEM;
+            }
+
+            // Assuming 8 pages of 4K for now. This should be dynamic.
+            if (sg_alloc_table(sgt, local_data.pfn_list.page_count, GFP_KERNEL)) {
+                printk(KERN_ERR "Failed to allocate sg_table\n");
+                kfree(sgt);
+                kfree(priv);
+                return -ENOMEM;
+            }
+            priv->sgt = sgt;
+
+            for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+                // This assumes the user provides valid physical addresses of pages
+                sg_set_page(sg, pfn_to_page(PFN_DOWN(local_data.pfn_list.addrs[i])), local_data.pfn_list.size[i], 0);
+                sg_dma_address(sg) = local_data.pfn_list.addrs[i];
+                sg_dma_len(sg) = local_data.pfn_list.size[i];
+            }
+
+            DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
+            exp_info.ops = &vmem_dmabuf_ops;
+            exp_info.size = 0;
+            for (int i = 0; i < local_data.pfn_list.page_count; i++) {
+                exp_info.size += local_data.pfn_list.size[i];
+            }
+            exp_info.flags = O_RDWR;
+            exp_info.priv = priv;
+
+            dmabuf = dma_buf_export(&exp_info);
+            if (IS_ERR(dmabuf)) {
+                printk(KERN_ERR "Failed to export dma_buf: %ld\n", PTR_ERR(dmabuf));
+                sg_free_table(sgt);
+                kfree(sgt);
+                kfree(priv);
+                return PTR_ERR(dmabuf);
+            }
+
+            fd = dma_buf_fd(dmabuf, O_CLOEXEC);
+            if (fd < 0) {
+                printk(KERN_ERR "Failed to get dma_buf fd: %d\n", fd);
+                dma_buf_put(dmabuf); // This will trigger release
+                return fd;
+            }
+
+            // Return the fd in the ipc_handle
+            memset(&local_data.ipc_handle, 0, sizeof(local_data.ipc_handle));
+            memcpy(local_data.ipc_handle.data, &fd, sizeof(fd));
+
+            if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data))) {
+                printk(KERN_ERR "Failed to copy data to user\n");
+                put_unused_fd(fd);
+                // dma_buf_put is implicitly called by fput on the fd
+                return -EFAULT;
+            }
+        }
         break;
     default:
         break;
