@@ -12,6 +12,7 @@ struct open_handle_data {
     int rank;
     int device_id;
     struct pfn_list pfn_list;
+    int fd;
 };
 
 int vmem_open() {
@@ -40,7 +41,7 @@ int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_i
     memcpy(pfn_list, &data.pfn_list, sizeof(data.pfn_list));
     return 0;
 }
-int vmem_get_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, struct pfn_list *pfn_list) {
+int vmem_get_handle(int fd, int *dma_fd, int rank, struct pfn_list *pfn_list) {
     // demo: just return the fd as handle
     struct open_handle_data data = {0};
     memcpy(data.pfn_list.addrs, pfn_list->addrs, sizeof(data.pfn_list.addrs));
@@ -48,6 +49,7 @@ int vmem_get_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, struct pfn_li
     data.pfn_list.page_count = pfn_list->page_count;
     ioctl(fd, 1, &data);
 
-    handle->data[0] = data.ipc_handle.data[0];
+    *dma_fd = data.fd;
+    printf("rank %d got dma_buf_fd %d from kernel\n", rank, *dma_fd);
     return fd;
 }

@@ -186,7 +186,7 @@ static int print_host_buffer(int *host_buf, size_t nr_elements, int rank)
  
 static int get_remote_buf_ptr(ze_device_handle_t *device,
                                 void *local_ptr,
-                                void *remote_ptr,
+                                void **remote_ptr,
                                 int rank)
 {
     struct exchange_data send_data, recv_data;
@@ -245,7 +245,9 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
  
     memcpy(&remote_ipc_handle, &fd_for_this_process, sizeof(fd_for_this_process));
 
-    vmem_get_handle(vmem_open(), &remote_ipc_handle, rank, &pfn_list);
+    int fd;
+    vmem_get_handle(vmem_open(), &fd, rank, &pfn_list);
+    memcpy(&remote_ipc_handle, &fd, sizeof(fd));
 
     printf("Rank %d new fd for remote ipc handle: %d\n", rank, remote_ipc_handle.data[0]);
  
@@ -254,7 +256,7 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
                              *device,
                              remote_ipc_handle,
                              0,
-                             &remote_ptr);  
+                             remote_ptr);  
  
     if (ret != ZE_RESULT_SUCCESS) {
         printf("rank %d failed to open ipc handle with ret:%d\n", rank ,ret);
@@ -282,7 +284,7 @@ int main(int argc, char *argv[])
  
     uint8_t *send_buf = NULL;
     uint8_t *recv_buf = NULL;
-    uint64_t peer_recv_ptr = 0;
+    void * peer_recv_ptr = 0;
  
     MPI_Init(&argc, &argv);
     int rank, rank_size;
@@ -341,10 +343,12 @@ int main(int argc, char *argv[])
  
     int copied_data = send_cpu_buf[0];
  
-    l0_memcpy((void *)peer_recv_ptr, send_buf, nr_elements * sizeof(int), cl1);
+    l0_memcpy(peer_recv_ptr, send_buf, nr_elements * sizeof(int), cl1);
     
     printf("Rank %d copy local src data to local dst with data %d\n", rank, copied_data);
  
+    MPI_Barrier(MPI_COMM_WORLD);
+
     zeMemCloseIpcHandle(context, (void *)peer_recv_ptr);
     // if (rank == 0) {
         print_device_buffer(recv_buf, bytes, rank, cl1);

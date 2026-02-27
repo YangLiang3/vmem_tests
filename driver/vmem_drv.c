@@ -33,6 +33,7 @@ struct open_handle_data {
     int rank;
     int device_id;
     struct pfn_list pfn_list;
+    int fd;
 };
 
 static dev_t vmem_dev;
@@ -192,7 +193,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 phys_addr_t phys = sg_phys(sg);
                 size_t len = sg->length;
                 phys_addr_t dma_addr = sg_dma_address(sg);
-                printk(KERN_INFO "sg %d: phys %pa, len %zu, dma_addr %pa\n", i, &phys, len, &dma_addr);
+                unsigned int offset = sg->offset;
+                printk(KERN_INFO "sg %d: phys %pa, len %zu, dma_addr %pa, offset %u\n", i, &phys, len, &dma_addr, offset);
                 if (i < 8) {
                     local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
@@ -250,6 +252,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 sg_set_page(sg, pfn_to_page(PFN_DOWN(local_data.pfn_list.addrs[i])), local_data.pfn_list.size[i], 0);
                 sg_dma_address(sg) = local_data.pfn_list.addrs[i];
                 sg_dma_len(sg) = local_data.pfn_list.size[i];
+                printk(KERN_INFO "export sg %d: phys %pa, len %zu\n", i, &local_data.pfn_list.addrs[i], local_data.pfn_list.size[i]);
             }
 
             DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
@@ -277,9 +280,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 return fd;
             }
 
-            // Return the fd in the ipc_handle
-            memset(&local_data.ipc_handle, 0, sizeof(local_data.ipc_handle));
-            memcpy(local_data.ipc_handle.data, &fd, sizeof(fd));
+            local_data.fd = fd;
 
             if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data))) {
                 printk(KERN_ERR "Failed to copy data to user\n");
