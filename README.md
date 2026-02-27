@@ -29,5 +29,6 @@ make -C test/
 ```
 insmod driver/vmem_drv.ko
 
-mpirun -n 2 test/test_vmem
+# Need to disable compression for known issue
+NEOReadDebugKeys=1 RenderCompressedBuffersEnabled=0 mpirun -n 2 test/test_vmem
 ```
