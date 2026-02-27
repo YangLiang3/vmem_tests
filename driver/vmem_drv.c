@@ -136,7 +136,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             printk(KERN_INFO "vmem: Looking for compatible VGA device...\n");
 
             // TODO find the right GPU device
-            pdev = pci_get_device(0x8086, local_data.device_id, NULL); // Intel GPU PCI ID
+            pdev = pci_get_device(0x8086, 0xe211, NULL); // Intel GPU PCI ID
             if (!pdev) {
                 // Fallback: try to find any display class device if specific ID fails
                 printk(KERN_ERR "Failed to find specific GPU pci device, trying to find any display class device\n");
@@ -191,9 +191,10 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             for_each_sg(sgt->sgl, sg, sgt->nents, i) {
                 phys_addr_t phys = sg_phys(sg);
                 size_t len = sg->length;
-                printk(KERN_INFO "sg %d: phys %pa, len %zu\n", i, &phys, len);
+                phys_addr_t dma_addr = sg_dma_address(sg);
+                printk(KERN_INFO "sg %d: phys %pa, len %zu, dma_addr %pa\n", i, &phys, len, &dma_addr);
                 if (i < 8) {
-                    local_data.pfn_list.addrs[i] = phys;
+                    local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
                 }
             }
