@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 struct pfn_list {
-    int page_count;
+    int nents;
     unsigned long long addrs[8];
     size_t size[8];
 };

@@ -26,7 +26,7 @@ typedef struct _ze_ipc_mem_handle_t
     printk(KERN_INFO "vmem: [%s] " fmt, dev_name(dev), ##__VA_ARGS__)
 
 struct pfn_list {
-    int page_count;
+    int nents;
     unsigned long long addrs[8];
     size_t size[8];
 };
@@ -106,7 +106,7 @@ static struct sg_table *vmem_map_dma_buf(struct dma_buf_attachment *attachment,
         return ERR_PTR(-ENOMEM);
 
     // Allocate the scatterlist table based on our stored page count
-    ret = sg_alloc_table(sgt, priv->pfn_list.page_count, GFP_KERNEL);
+    ret = sg_alloc_table(sgt, priv->pfn_list.nents, GFP_KERNEL);
     if (ret) {
         kfree(sgt);
         return ERR_PTR(ret);
@@ -114,25 +114,24 @@ static struct sg_table *vmem_map_dma_buf(struct dma_buf_attachment *attachment,
         
     struct scatterlist *dst_sg = sgt->sgl;
     
-    for (i = 0; i < priv->pfn_list.page_count; i++) {
+    for (i = 0; i < priv->pfn_list.nents; i++) {
         if (!dst_sg) break;
         
         // 1. Set length/offset from our stored list 
         dst_sg->offset = 0; 
         dst_sg->length = priv->pfn_list.size[i];
+#ifdef CONFIG_NEED_SG_DMA_LENGTH
+        dst_sg->dma_length = priv->pfn_list.size[i];
+#endif
         
-        // We might want to set a dummy page to avoid iterators crashing, 
-        // using the physical address to get a struct page pointer if possible.
-        // PFN_DOWN assumes standard RAM, which might not be true for BARs, 
-        // but it gives a non-NULL page pointer usually.
-        // Or we simply don't set page link if we trust dma_map_resource consumers don't peek.
-        // Safe bet:
-        // sg_set_page(dst_sg, pfn_to_page(PFN_DOWN(priv->pfn_list.addrs[i])), priv->pfn_list.size[i], 0);
-
-        // 2. Map using dma_map_resource for P2P (MMIO/BAR addresses)
-        if (dev_is_pci(attachment->dev)) {
-             vmem_log(attachment->dev, "mapping resource to importer\n");
-        }
+        // We might want to set a dummy page to avoid iterators crashing.
+        // For P2P resources (MMIO/LMEM), there might not be a valid struct page.
+        // However, many importers assume sg_page(sg) is valid.
+        // Ideally we should use PFN_DOWN(phys_addr) if it's system memory, 
+        // but for BARs valid struct page might not exist.
+        // Leaving page NULL is risky if importers dereference it. 
+        // Some drivers set it to a dummy page or use pfn_to_page if appropriate.
+        // Here we rely on the importer understanding dma_address is key.
 
         dma_addr_t dma_addr = dma_map_resource(attachment->dev, 
                                                priv->pfn_list.addrs[i], 
@@ -150,10 +149,15 @@ static struct sg_table *vmem_map_dma_buf(struct dma_buf_attachment *attachment,
         sg_dma_address(dst_sg) = dma_addr;
         sg_dma_len(dst_sg) = priv->pfn_list.size[i];
 
+        if (dev_is_pci(attachment->dev)) {
+             vmem_log(attachment->dev, "mapped resource P2P: phys=%llx len=%zu dma=%llx\n", 
+                priv->pfn_list.addrs[i], priv->pfn_list.size[i], dma_addr);
+        }
+
         dst_sg = sg_next(dst_sg);
     }
 
-    sgt->nents = priv->pfn_list.page_count; 
+    sgt->nents = priv->pfn_list.nents; 
     ret = 0; 
 
     return sgt;
@@ -226,7 +230,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             // Check pre-found specific Intel GPU devices
             pdev = NULL;
             if (local_data.rank < vmem_pdev_count) {
-                // pdev = vmem_pdevs[(local_data.rank + 1) % 2];
+                // // pdev = vmem_pdevs[(local_data.rank + 1) % 2];
                 pdev = vmem_pdevs[local_data.rank];
             }
 
@@ -277,7 +281,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 size_t len = sg->length;
                 phys_addr_t dma_addr = sg_dma_address(sg);
                 unsigned int offset = sg->offset;
-                vmem_log(&pdev->dev, "[rank %d] sg %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
+                vmem_log(&pdev->dev, "[rank %d] sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
                        local_data.rank,
                        i, &phys, len, &dma_addr, offset);
                 if (i < 8) {
@@ -285,15 +289,15 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                     local_data.pfn_list.size[i] = len;
                 }
             }
-            local_data.pfn_list.page_count = sgt->nents;
+            local_data.pfn_list.nents = sgt->nents;
 
-            dma_resv_lock(dmabuf->resv, NULL);
-            dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
-            dma_resv_unlock(dmabuf->resv);
+            // dma_resv_lock(dmabuf->resv, NULL);
+            // dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+            // dma_resv_unlock(dmabuf->resv);
             
-            dma_buf_detach(dmabuf, attach);
-            // pci_dev_put(pdev);
-            dma_buf_put(dmabuf);
+            // dma_buf_detach(dmabuf, attach);
+            // // pci_dev_put(pdev);
+            // dma_buf_put(dmabuf);
 
             if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data)))
                 return -EFAULT;
@@ -306,7 +310,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             struct dma_buf *dmabuf;
            // struct sg_table *sgt;
            // struct scatterlist *sg;
-            int i, fd;
+            int fd;
 
             printk(KERN_INFO "vmem ioctl cmd 1\n");
 
@@ -325,7 +329,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
             exp_info.ops = &vmem_dmabuf_ops;
             exp_info.size = 0;
-            for (int i = 0; i < local_data.pfn_list.page_count; i++) {
+            for (int i = 0; i < local_data.pfn_list.nents; i++) {
                 printk(KERN_INFO "export cmd1: phys %llx, len %zu\n", local_data.pfn_list.addrs[i], local_data.pfn_list.size[i]);
                 exp_info.size += local_data.pfn_list.size[i];
             }

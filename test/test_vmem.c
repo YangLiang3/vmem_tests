@@ -207,13 +207,14 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
     device_id = device_properties.deviceId;
     printf("rank %d device_id: %x\n", rank, device_id);
 
-    struct pfn_list pfn_list = {0};    
-    vmem_open_handle(vmem_open(), &local_ipc_handle, rank, device_id, &pfn_list);
+    struct pfn_list local_pfn_list = {0};    
+    struct pfn_list remote_pfn_list = {0};    
+    vmem_open_handle(vmem_open(), &local_ipc_handle, rank, device_id, &local_pfn_list);
  
     memcpy(&local_dma_fd, &local_ipc_handle, sizeof(local_dma_fd));
     send_data.pid = getpid();
     send_data.dma_buf_fd = local_dma_fd;
-    memcpy(&(send_data.pfn_list), &pfn_list, sizeof(pfn_list));
+    memcpy(&(send_data.pfn_list), &local_pfn_list, sizeof(local_pfn_list));
     MPI_Sendrecv(&send_data, sizeof(send_data), MPI_BYTE,
                 /*dest*/ 1 - rank, 0,
                 &recv_data, sizeof(recv_data), MPI_BYTE,
@@ -246,11 +247,11 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
     memcpy(&remote_ipc_handle, &fd_for_this_process, sizeof(fd_for_this_process));
 
     int fd;
-    vmem_get_handle(vmem_open(), &fd, rank, &pfn_list);
+    memcpy(&remote_pfn_list, &recv_data.pfn_list, sizeof(remote_pfn_list));
+    vmem_get_handle(vmem_open(), &fd, rank, &remote_pfn_list);
     memcpy(&remote_ipc_handle, &fd, sizeof(fd));
-
     printf("Rank %d new fd for remote ipc handle: %d\n", rank, remote_ipc_handle.data[0]);
- 
+
     ret = zeMemOpenIpcHandle(context,
                             //  devices[(rank +1) % rank_size ],
                              *device,
@@ -350,10 +351,10 @@ int main(int argc, char *argv[])
     printf("Rank %d copy local src data to local dst with data %d\n", rank, copied_data);
  
     MPI_Barrier(MPI_COMM_WORLD);
-
+    print_device_buffer(recv_buf, bytes, rank, cl1);
     zeMemCloseIpcHandle(context, (void *)peer_recv_ptr);
     // if (rank == 0) {
-        print_device_buffer(recv_buf, bytes, rank, cl1);
+        
     // }
    
  
