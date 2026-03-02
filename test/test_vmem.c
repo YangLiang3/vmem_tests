@@ -300,17 +300,19 @@ int main(int argc, char *argv[])
     }
  
     printf("MPI rank %d, size :%d\n", rank, rank_size);
+    int cur_dev_id = rank;
+
     l0_init(0, &device_count, &devices);
     ERR_CHECK_AND_PRINT(device_count < 2, "Requires at least 2 devices, found %u", device_count);
  
     l0_event_pool_create(1, &event_pool);
     l0_event_create(event_pool, 0, &event);
  
-    l0_command_list_create_immediate(0, 0, devices[rank], &cl1);
+    l0_command_list_create_immediate(0, 0, devices[cur_dev_id], &cl1);
     // l0_command_list_create_immediate(0, 0, devices[1], &cl2);
  
-    l0_allocate_device_buffer((void **) &send_buf, bytes, devices[rank]);
-    l0_allocate_device_buffer((void **) &recv_buf, bytes, devices[rank]);
+    l0_allocate_device_buffer((void **) &send_buf, bytes, devices[cur_dev_id]);
+    l0_allocate_device_buffer((void **) &recv_buf, bytes, devices[cur_dev_id]);
     // l0_allocate_device_buffer((void **) &device_buf2, size, devices[1]);
  
     int *send_cpu_buf = (int *)malloc(bytes);
@@ -337,9 +339,9 @@ int main(int argc, char *argv[])
     }
  
     MPI_Barrier(MPI_COMM_WORLD);
- 
+  
     get_remote_buf_ptr(&devices[rank], recv_buf, &peer_recv_ptr, rank);
-    printf("Rank %d peer_recv_ptr %p\n", rank, (void *)peer_recv_ptr);
+    printf("Rank %d peer_recv_ptr %p,send_buf:%p\n", rank, (void *)peer_recv_ptr, (void *)send_buf);
  
     int copied_data = send_cpu_buf[0];
  
