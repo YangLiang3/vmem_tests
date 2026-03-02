@@ -4,16 +4,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
+#include "vmem_ioctl.h"
 
 #define VMEM_DEV_PATH "/dev/vmem"
-
-struct open_handle_data {
-    ze_ipc_mem_handle_t ipc_handle;
-    int rank;
-    int device_id;
-    struct pfn_list pfn_list;
-    int fd;
-};
 
 int vmem_open() {
     return open(VMEM_DEV_PATH, O_RDWR);
@@ -34,7 +27,7 @@ int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_i
         .rank = rank,
         .device_id = device_id
     };
-    ioctl(fd, 0, &data);
+    ioctl(fd, VMEM_IOCTL_GET_PFN_LIST, &data);
     for (int i = 0; i < 8; i++) {
         printf("rank %d device_id %d received phys addr %llx\n", rank, device_id, data.pfn_list.addrs[i]);
     }
@@ -46,8 +39,8 @@ int vmem_get_handle(int fd, int *dma_fd, int rank, struct pfn_list *pfn_list) {
     struct open_handle_data data = {0};
     memcpy(data.pfn_list.addrs, pfn_list->addrs, sizeof(data.pfn_list.addrs));
     memcpy(data.pfn_list.size, pfn_list->size, sizeof(data.pfn_list.size));
-    data.pfn_list.page_count = pfn_list->page_count;
-    ioctl(fd, 1, &data);
+    data.pfn_list.nents = pfn_list->nents;
+    ioctl(fd, VMEM_IOCTL_GET_IPC_HANDLE, &data);
 
     *dma_fd = data.fd;
     printf("rank %d got dma_buf_fd %d from kernel\n", rank, *dma_fd);

@@ -8,21 +8,23 @@
 source /opt/intel/oneapi/setvars.sh
 ```
 
-## Build
-
+## Build All
+```
+make
+```
 ### Build KMD
 ```
-make -C driver/
+make driver
 ```
 
 ### Build UMD
 ```
-make -C lib/
+make lib
 ```
 
 ### Build test
 ```
-make -C test/
+make test
 ```
 
 ## Run Test

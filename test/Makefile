@@ -1,5 +1,5 @@
 CC=icpx
-CFLAGS=-Wall -O2 -I/usr/include/level_zero/ -g
+CFLAGS=-Wall -O2 -I/usr/include/level_zero/ -I../driver/ -g
 LDFLAGS=-lmpi -lze_loader
 TARGET=test_vmem
 all: $(TARGET)

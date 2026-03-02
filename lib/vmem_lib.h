@@ -1,15 +1,12 @@
 #ifndef VMEM_LIB_H
 #define VMEM_LIB_H
 #include <ze_api.h>
+#include "vmem_ioctl.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-struct pfn_list {
-    int nents;
-    unsigned long long addrs[8];
-    size_t size[8];
-};
 
 int vmem_open();
 int vmem_close(int fd);

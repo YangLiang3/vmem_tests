@@ -9,35 +9,12 @@
 #include <linux/pci.h>
 #include <linux/dma-resv.h>
 #include <linux/slab.h>
+#include "vmem_ioctl.h"
 
 
-#define VMEM_DEV_NAME "vmem"
-#define VMEM_DEV_CLASS "vmem_class"
-#define VMEM_BUF_SIZE 256
-
-#define ZE_MAX_IPC_HANDLE_SIZE  64
-typedef struct _ze_ipc_mem_handle_t
-{
-    char data[ZE_MAX_IPC_HANDLE_SIZE];                                      ///< [out] Opaque data representing an IPC handle
-
-} ze_ipc_mem_handle_t;
 
 #define vmem_log(dev, fmt, ...) \
     printk(KERN_INFO "vmem: [%s] " fmt, dev_name(dev), ##__VA_ARGS__)
-
-struct pfn_list {
-    int nents;
-    unsigned long long addrs[8];
-    size_t size[8];
-};
-
-struct open_handle_data {
-    ze_ipc_mem_handle_t ipc_handle;
-    int rank;
-    int device_id;
-    struct pfn_list pfn_list;
-    int fd;
-};
 
 static dev_t vmem_dev;
 static struct cdev vmem_cdev;
@@ -204,7 +181,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     // demo: no real ioctl
     switch (cmd)
     {
-    case 0:
+    case VMEM_IOCTL_GET_PFN_LIST:
         printk(KERN_INFO "vmem ioctl cmd 0\n");
         // get the level zero fd from user and print it in kernel log for demo
         {
@@ -230,8 +207,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             // Check pre-found specific Intel GPU devices
             pdev = NULL;
             if (local_data.rank < vmem_pdev_count) {
-                // // pdev = vmem_pdevs[(local_data.rank + 1) % 2];
-                pdev = vmem_pdevs[local_data.rank];
+                pdev = vmem_pdevs[(local_data.rank + 1) % 2];
+                // pdev = vmem_pdevs[local_data.rank];
             }
 
             if (!pdev) {
@@ -303,7 +280,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 return -EFAULT;
         }
         break;
-    case 1: // Create dma_buf from physical addresses
+    case VMEM_IOCTL_GET_IPC_HANDLE: // Create dma_buf from physical addresses
         {
             struct open_handle_data local_data;
             struct vmem_dmabuf_priv *priv;
