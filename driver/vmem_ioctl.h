@@ -29,6 +29,9 @@ struct open_handle_data {
     ze_ipc_mem_handle_t ipc_handle;
     int rank;
     int device_id;
+    uint32_t bus;
+    uint32_t device;
+    uint32_t function;
     struct pfn_list pfn_list;
     int fd;
 };

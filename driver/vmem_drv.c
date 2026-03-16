@@ -207,7 +207,20 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             // Check pre-found specific Intel GPU devices
             pdev = NULL;
             if (local_data.rank < vmem_pdev_count) {
-                pdev = vmem_pdevs[(local_data.rank + 1) % 2];
+                for( int i = 0; i < vmem_pdev_count; i++) {
+                    int bus = vmem_pdevs[i]->bus->number;
+                    int dev = PCI_SLOT(vmem_pdevs[i]->devfn);
+                    int func = PCI_FUNC(vmem_pdevs[i]->devfn);
+
+                    if (bus == local_data.bus && \
+                        dev == local_data.device && \
+                        func == local_data.function) {
+                        pdev = vmem_pdevs[i];
+                        vmem_log(&pdev->dev, "Found matching pre-registered device for rank %d\n", local_data.rank);
+                        break;
+                    }
+                }
+                // pdev = vmem_pdevs[(local_data.rank + 1) % 2];
                 // pdev = vmem_pdevs[local_data.rank];
             }
 
@@ -225,6 +238,15 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                     pdev = NULL; // Reset so we hit fallback or error
                 }
             }
+
+            uint64_t bar2_start = 0;
+            if(pdev) {
+                struct resource *res = &pdev->resource[2];
+                bar2_start = res->start;
+                vmem_log(&pdev->dev, "Device BAR2 resource: start=%pa\n", &bar2_start);
+                
+            }
+
             // At this point, pdev is valid and holds a ref from pci_get_class/attach loop
             
             // For dynamic attachments, we must lock the reservation object before mapping
@@ -262,8 +284,10 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                        local_data.rank,
                        i, &phys, len, &dma_addr, offset);
                 if (i < 8) {
-                    local_data.pfn_list.addrs[i] = dma_addr;
+                    local_data.pfn_list.addrs[i] = dma_addr - bar2_start;
                     local_data.pfn_list.size[i] = len;
+                    vmem_log(&pdev->dev, "Calculated P2P addr for rank %d: %llx (dma_addr %pa - bar2_start %pa)\n",
+                           local_data.rank, local_data.pfn_list.addrs[i], &dma_addr, &bar2_start);
                 }
             }
             local_data.pfn_list.nents = sgt->nents;
@@ -362,6 +386,26 @@ static int __init vmem_init(void) {
     
     // Find all matching devices
     while ((pdev = pci_get_device(0x8086, 0xe211, pdev))) {
+        if (vmem_pdev_count < MAX_VMEM_DEVICES) {
+            // Take an extra reference because pci_get_device will decrement it when passed to next call
+            // OR simply: pci_dev_get(pdev);
+            // Wait, if I pass pdev to next iteration, pci_get_function puts it. 
+            // So if I want to hoard them, I must pci_dev_get(pdev) before continuing loop?
+            // Actually, simply doing pci_dev_get(pdev) stores a reference for us.
+            pci_dev_get(pdev);
+            vmem_pdevs[vmem_pdev_count++] = pdev;
+            vmem_log(&pdev->dev, "Found GPU pci device [%d]\n", vmem_pdev_count-1);
+        } else {
+             printk(KERN_WARNING "vmem: Too many devices found, ignoring extra\n");
+             // Don't break, let loop finish to properly refcount the current pdev that would be put by next call? 
+             // If I break here, pdev (current) has refcount +1. Correct. 
+             // But if I CONTINUE, pci_get_device puts it. 
+             // So if I want to stop storing but continue iterating... wait, if I want to stop, I just break and put the current one.
+            //  pci_dev_put(pdev);
+             break;
+        }
+    }
+    while ((pdev = pci_get_device(0x8086, 0xe210, pdev))) {
         if (vmem_pdev_count < MAX_VMEM_DEVICES) {
             // Take an extra reference because pci_get_device will decrement it when passed to next call
             // OR simply: pci_dev_get(pdev);

@@ -205,7 +205,19 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
     ze_device_properties_t device_properties = {ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES};
     zeDeviceGetProperties(*device, &device_properties);
     device_id = device_properties.deviceId;
-    printf("rank %d device_id: %x\n", rank, device_id);
+    printf("rank %d  %s device_id: %x\n", rank, device_properties.name ,device_id);
+
+    // get the device BDF
+    ze_pci_ext_properties_t pciProperties = {};
+    pciProperties.stype = ZE_STRUCTURE_TYPE_PCI_EXT_PROPERTIES;
+    ze_result_t result = zeDevicePciGetPropertiesExt(*device, &pciProperties);
+    // The BDF components are available in pciProperties.address
+    uint32_t addr_domain   = pciProperties.address.domain;
+    uint32_t addr_bus      = pciProperties.address.bus;
+    uint32_t addr_device   = pciProperties.address.device;
+    uint32_t addr_function = pciProperties.address.function;
+    printf("PCI BDF: %04x:%02x:%02x.%x\n", addr_domain, addr_bus, addr_device, addr_function);
+    vmem_init(addr_bus, addr_device, addr_function);
 
     struct pfn_list local_pfn_list = {0};    
     struct pfn_list remote_pfn_list = {0};    
