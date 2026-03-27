@@ -9,6 +9,7 @@
 #include <linux/pci.h>
 #include <linux/dma-resv.h>
 #include <linux/slab.h>
+#include <linux/kernel.h>
 #include "vmem_ioctl.h"
 
 
@@ -200,13 +201,15 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             struct pci_dev *pdev = NULL;
             struct dma_buf_attachment *attach = ERR_PTR(-ENODEV);
+            struct sg_table *sgt = NULL;
+            int sgt_nents = 0;
+            int export_nents = 0;
 
             // Iterate all VGA devices to find one that can attach to this dmabuf
             printk(KERN_INFO "vmem: Looking for compatible VGA device...\n");
 
-            // Check pre-found specific Intel GPU devices
-            pdev = NULL;
-            if (local_data.rank < vmem_pdev_count) {
+            // Check pre-found specific Intel GPU devices by BDF first.
+            if (vmem_pdev_count > 0) {
                 for( int i = 0; i < vmem_pdev_count; i++) {
                     int bus = vmem_pdevs[i]->bus->number;
                     int dev = PCI_SLOT(vmem_pdevs[i]->devfn);
@@ -220,12 +223,20 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                         break;
                     }
                 }
-                // pdev = vmem_pdevs[(local_data.rank + 1) % 2];
-                // pdev = vmem_pdevs[local_data.rank];
+                // Fallback to rank-based modulo selection for asymmetric node topologies.
+                if (!pdev) {
+                    int selected_idx = local_data.rank % vmem_pdev_count;
+                    pdev = vmem_pdevs[selected_idx];
+                    vmem_log(&pdev->dev,
+                             "Fallback selected device index %d for rank %d\n",
+                             selected_idx, local_data.rank);
+                }
             }
 
             if (!pdev) {
-                printk(KERN_ERR "vmem: No device found for rank %d\n", (local_data.rank + 1) % 2);
+                printk(KERN_ERR "vmem: No device found for rank %d\n", local_data.rank);
+                dma_buf_put(dmabuf);
+                return -ENODEV;
             } else {
                 vmem_log(&pdev->dev, "Trying pre-found GPU pci device for rank %d\n", local_data.rank);
                 
@@ -235,7 +246,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                     pci_dev_get(pdev); 
                 } else {
                     printk(KERN_ERR "vmem: Failed to attach to this device (err: %ld)\n", PTR_ERR(attach));
-                    pdev = NULL; // Reset so we hit fallback or error
+                    dma_buf_put(dmabuf);
+                    return PTR_ERR(attach);
                 }
             }
 
@@ -247,10 +259,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 
             }
 
-            // At this point, pdev is valid and holds a ref from pci_get_class/attach loop
-            
-            // For dynamic attachments, we must lock the reservation object before mapping
-            struct sg_table *sgt;
+            // At this point, pdev and attach are valid.
 
             // Lock the reservation object before mapping
             dma_resv_lock(dmabuf->resv, NULL);
@@ -267,15 +276,32 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 long err = PTR_ERR(sgt);
                 printk(KERN_ERR "Failed to map dma_buf attachment: %ld\n", err);
                 dma_buf_detach(dmabuf, attach);
-                // pci_dev_put(pdev);
                 dma_buf_put(dmabuf);
                 return err;
             }
 
             struct scatterlist *sg;
             int i = 0;
+            sgt_nents = sgt->nents ? sgt->nents : sgt->orig_nents;
+            if (sgt_nents <= 0) {
+                printk(KERN_ERR "vmem: mapped sg table is empty (nents=%d, orig_nents=%d)\n",
+                       sgt->nents, sgt->orig_nents);
+                dma_resv_lock(dmabuf->resv, NULL);
+                dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+                dma_resv_unlock(dmabuf->resv);
+                dma_buf_detach(dmabuf, attach);
+                dma_buf_put(dmabuf);
+                return -ENODATA;
+            }
+
+            export_nents = min_t(int, sgt_nents,
+                                 (int)ARRAY_SIZE(local_data.pfn_list.addrs));
+            if (export_nents < sgt_nents) {
+                printk(KERN_WARNING "vmem: truncating sg entries from %d to %d\n",
+                       sgt_nents, export_nents);
+            }
             // Iterate and print scatter list info
-            for_each_sg(sgt->sgl, sg, sgt->nents, i) {
+            for_each_sg(sgt->sgl, sg, export_nents, i) {
                 phys_addr_t phys = sg_phys(sg);
                 size_t len = sg->length;
                 phys_addr_t dma_addr = sg_dma_address(sg);
@@ -290,15 +316,13 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                            local_data.rank, local_data.pfn_list.addrs[i], &dma_addr, &bar2_start);
                 }
             }
-            local_data.pfn_list.nents = sgt->nents;
+            local_data.pfn_list.nents = export_nents;
 
-            // dma_resv_lock(dmabuf->resv, NULL);
-            // dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
-            // dma_resv_unlock(dmabuf->resv);
-            
-            // dma_buf_detach(dmabuf, attach);
-            // // pci_dev_put(pdev);
-            // dma_buf_put(dmabuf);
+            dma_resv_lock(dmabuf->resv, NULL);
+            dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
+            dma_resv_unlock(dmabuf->resv);
+            dma_buf_detach(dmabuf, attach);
+            dma_buf_put(dmabuf);
 
             if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data)))
                 return -EFAULT;
