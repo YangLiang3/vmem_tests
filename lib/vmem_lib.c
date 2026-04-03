@@ -9,7 +9,7 @@
 #define VGPU_BAR_START 0x100000000ULL
 #define VMEM_DEV_PATH "/dev/vmem"
 
-uint32_t bus, device, function;
+uint32_t domain, bus, device, function;
 
 int vmem_open() {
     return open(VMEM_DEV_PATH, O_RDWR);
@@ -24,9 +24,11 @@ int vmem_write(int fd, const char *buf, int len) {
     return write(fd, buf, len);
 }
 
-int vmem_init(uint32_t addr_bus, 
+int vmem_init(uint32_t addr_domain,
+              uint32_t addr_bus, 
               uint32_t addr_device, 
               uint32_t addr_function) {
+    domain = addr_domain;
     bus = addr_bus;
     device = addr_device;
     function = addr_function;
@@ -34,12 +36,14 @@ int vmem_init(uint32_t addr_bus,
 }
 
 int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_id, struct pfn_list *pfn_list) {
-    printf("bus %d, device %d, function %d\n", bus, device, function);
+    printf("domain %04x, bus %02x, device %02x, function %x\n",
+           domain, bus, device, function);
     // pass handle to kernel
     struct open_handle_data data = {
         .ipc_handle = *handle,
         .rank = rank,
         .device_id = device_id,
+        .domain = domain,
         .bus = bus,
         .device = device,
         .function = function

@@ -217,7 +217,7 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
     uint32_t addr_device   = pciProperties.address.device;
     uint32_t addr_function = pciProperties.address.function;
     printf("PCI BDF: %04x:%02x:%02x.%x\n", addr_domain, addr_bus, addr_device, addr_function);
-    vmem_init(addr_bus, addr_device, addr_function);
+    vmem_init(addr_domain, addr_bus, addr_device, addr_function);
 
     struct pfn_list local_pfn_list = {0};    
     struct pfn_list remote_pfn_list = {0};    
