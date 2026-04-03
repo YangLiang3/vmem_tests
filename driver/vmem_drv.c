@@ -26,23 +26,37 @@ static char vmem_buf[VMEM_BUF_SIZE];
 static struct pci_dev *vmem_pdevs[MAX_VMEM_DEVICES];
 static int vmem_pdev_count = 0;
 
-#define VMEM_BAR_B6_BASE 0x62800000000ULL
-#define VMEM_BAR_B8_BASE 0x6a000000000ULL
-#define VMEM_BAR_WINDOW_SIZE (VMEM_BAR_B8_BASE - VMEM_BAR_B6_BASE)
+#define VMEM_BAR_0000_B6_BASE 0x62800000000ULL
+#define VMEM_BAR_0000_B8_BASE 0x6a000000000ULL
+#define VMEM_BAR_0001_B6_BASE 0x96800000000ULL
+#define VMEM_BAR_0001_B8_BASE 0x9e000000000ULL
+#define VMEM_BAR_WINDOW_SIZE (VMEM_BAR_0000_B8_BASE - VMEM_BAR_0000_B6_BASE)
 
 static bool vmem_translate_bar_dma_addr(phys_addr_t dma_addr,
                                         phys_addr_t *translated_addr)
 {
-    u64 b6_end = VMEM_BAR_B6_BASE + VMEM_BAR_WINDOW_SIZE;
-    u64 b8_end = VMEM_BAR_B8_BASE + VMEM_BAR_WINDOW_SIZE;
+    u64 b6_0000_end = VMEM_BAR_0000_B6_BASE + VMEM_BAR_WINDOW_SIZE;
+    u64 b8_0000_end = VMEM_BAR_0000_B8_BASE + VMEM_BAR_WINDOW_SIZE;
+    u64 b6_0001_end = VMEM_BAR_0001_B6_BASE + VMEM_BAR_WINDOW_SIZE;
+    u64 b8_0001_end = VMEM_BAR_0001_B8_BASE + VMEM_BAR_WINDOW_SIZE;
 
-    if (dma_addr >= VMEM_BAR_B6_BASE && dma_addr < b6_end) {
-        *translated_addr = VMEM_BAR_B8_BASE + (dma_addr - VMEM_BAR_B6_BASE);
+    if (dma_addr >= VMEM_BAR_0000_B6_BASE && dma_addr < b6_0000_end) {
+        *translated_addr = VMEM_BAR_0000_B8_BASE + (dma_addr - VMEM_BAR_0000_B6_BASE);
         return true;
     }
 
-    if (dma_addr >= VMEM_BAR_B8_BASE && dma_addr < b8_end) {
-        *translated_addr = VMEM_BAR_B6_BASE + (dma_addr - VMEM_BAR_B8_BASE);
+    if (dma_addr >= VMEM_BAR_0000_B8_BASE && dma_addr < b8_0000_end) {
+        *translated_addr = VMEM_BAR_0000_B6_BASE + (dma_addr - VMEM_BAR_0000_B8_BASE);
+        return true;
+    }
+
+    if (dma_addr >= VMEM_BAR_0001_B6_BASE && dma_addr < b6_0001_end) {
+        *translated_addr = VMEM_BAR_0001_B8_BASE + (dma_addr - VMEM_BAR_0001_B6_BASE);
+        return true;
+    }
+
+    if (dma_addr >= VMEM_BAR_0001_B8_BASE && dma_addr < b8_0001_end) {
+        *translated_addr = VMEM_BAR_0001_B6_BASE + (dma_addr - VMEM_BAR_0001_B8_BASE);
         return true;
     }
 
