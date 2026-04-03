@@ -26,91 +26,23 @@ static char vmem_buf[VMEM_BUF_SIZE];
 static struct pci_dev *vmem_pdevs[MAX_VMEM_DEVICES];
 static int vmem_pdev_count = 0;
 
-struct vmem_bar_swap_rule {
-    u32 src_domain;
-    u32 src_bus;
-    u32 src_device;
-    u32 src_function;
-    u64 src_bar_base;
-    u32 dst_domain;
-    u32 dst_bus;
-    u32 dst_device;
-    u32 dst_function;
-    u64 dst_bar_base;
-    u64 window_size;
-};
-
-static const struct vmem_bar_swap_rule vmem_bar_swap_rules[] = {
-    {
-        .src_domain = 0x0000,
-        .src_bus = 0xb6,
-        .src_device = 0x00,
-        .src_function = 0x0,
-        .src_bar_base = 0x436800000000ULL,
-        .dst_domain = 0x0000,
-        .dst_bus = 0xb8,
-        .dst_device = 0x00,
-        .dst_function = 0x0,
-        .dst_bar_base = 0x43e000000000ULL,
-        .window_size = 0x43e000000000ULL - 0x436800000000ULL,
-    },
-    {
-        .src_domain = 0x0000,
-        .src_bus = 0xb8,
-        .src_device = 0x00,
-        .src_function = 0x0,
-        .src_bar_base = 0x43e000000000ULL,
-        .dst_domain = 0x0000,
-        .dst_bus = 0xb6,
-        .dst_device = 0x00,
-        .dst_function = 0x0,
-        .dst_bar_base = 0x436800000000ULL,
-        .window_size = 0x43e000000000ULL - 0x436800000000ULL,
-    },
-    {
-        .src_domain = 0x0001,
-        .src_bus = 0xb6,
-        .src_device = 0x00,
-        .src_function = 0x0,
-        .src_bar_base = 0x6b6800000000ULL,
-        .dst_domain = 0x0001,
-        .dst_bus = 0xb8,
-        .dst_device = 0x00,
-        .dst_function = 0x0,
-        .dst_bar_base = 0x6be000000000ULL,
-        .window_size = 0x6be000000000ULL - 0x6b6800000000ULL,
-    },
-    {
-        .src_domain = 0x0001,
-        .src_bus = 0xb8,
-        .src_device = 0x00,
-        .src_function = 0x0,
-        .src_bar_base = 0x6be000000000ULL,
-        .dst_domain = 0x0001,
-        .dst_bus = 0xb6,
-        .dst_device = 0x00,
-        .dst_function = 0x0,
-        .dst_bar_base = 0x6b6800000000ULL,
-        .window_size = 0x6be000000000ULL - 0x6b6800000000ULL,
-    },
-};
+#define VMEM_BAR_B6_BASE 0x62800000000ULL
+#define VMEM_BAR_B8_BASE 0x6a000000000ULL
+#define VMEM_BAR_WINDOW_SIZE (VMEM_BAR_B8_BASE - VMEM_BAR_B6_BASE)
 
 static bool vmem_translate_bar_dma_addr(phys_addr_t dma_addr,
-                                        phys_addr_t *translated_addr,
-                                        const struct vmem_bar_swap_rule **matched_rule)
+                                        phys_addr_t *translated_addr)
 {
-    int i;
+    u64 b6_end = VMEM_BAR_B6_BASE + VMEM_BAR_WINDOW_SIZE;
+    u64 b8_end = VMEM_BAR_B8_BASE + VMEM_BAR_WINDOW_SIZE;
 
-    for (i = 0; i < ARRAY_SIZE(vmem_bar_swap_rules); i++) {
-        const struct vmem_bar_swap_rule *rule = &vmem_bar_swap_rules[i];
-        u64 range_end = rule->src_bar_base + rule->window_size;
+    if (dma_addr >= VMEM_BAR_B6_BASE && dma_addr < b6_end) {
+        *translated_addr = VMEM_BAR_B8_BASE + (dma_addr - VMEM_BAR_B6_BASE);
+        return true;
+    }
 
-        if (dma_addr < rule->src_bar_base || dma_addr >= range_end)
-            continue;
-
-        *translated_addr = rule->dst_bar_base + (dma_addr - rule->src_bar_base);
-        if (matched_rule)
-            *matched_rule = rule;
+    if (dma_addr >= VMEM_BAR_B8_BASE && dma_addr < b8_end) {
+        *translated_addr = VMEM_BAR_B6_BASE + (dma_addr - VMEM_BAR_B8_BASE);
         return true;
     }
 
@@ -403,28 +335,23 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 size_t len = sg->length;
                 phys_addr_t dma_addr = sg_dma_address(sg);
                 phys_addr_t translated_dma_addr = dma_addr;
-                const struct vmem_bar_swap_rule *matched_rule = NULL;
                 unsigned int offset = sg->offset;
                 vmem_log(&pdev->dev, "[rank %d] sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
                        local_data.rank,
                        i, &phys, len, &dma_addr, offset);
 
-                if (vmem_translate_bar_dma_addr(dma_addr, &translated_dma_addr, &matched_rule)) {
+                if (vmem_translate_bar_dma_addr(dma_addr, &translated_dma_addr)) {
                     vmem_log(&pdev->dev,
-                             "Translated dma_addr from %pa to %pa using BAR swap %04x:%02x:%02x.%x -> %04x:%02x:%02x.%x\n",
-                             &dma_addr, &translated_dma_addr,
-                             matched_rule->src_domain, matched_rule->src_bus,
-                             matched_rule->src_device, matched_rule->src_function,
-                             matched_rule->dst_domain, matched_rule->dst_bus,
-                             matched_rule->dst_device, matched_rule->dst_function);
+                             "Translated dma_addr from %pa to %pa by range mapping\n",
+                             &dma_addr, &translated_dma_addr);
                     dma_addr = translated_dma_addr;
                 }
 
                 if (i < 8) {
                     local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
-                          vmem_log(&pdev->dev, "Calculated P2P addr for rank %d: %llx (dma_addr %pa)\n",
-                              local_data.rank, local_data.pfn_list.addrs[i], &dma_addr);
+                    vmem_log(&pdev->dev, "Calculated P2P addr for rank %d: %llx (dma_addr %pa)\n",
+                             local_data.rank, local_data.pfn_list.addrs[i], &dma_addr);
                 }
             }
             local_data.pfn_list.nents = export_nents;
