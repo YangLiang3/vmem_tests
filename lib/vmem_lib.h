@@ -16,8 +16,8 @@ int vmem_init(uint32_t addr_domain,
               uint32_t addr_bus, 
               uint32_t addr_device, 
               uint32_t addr_function);
-int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_id, struct pfn_list *pfn_list);
-int vmem_get_handle(int fd, int *dma_fd, int rank, struct pfn_list *pfn_list);
+int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, struct pfn_list *pfn_list);
+int vmem_get_handle(int fd, int *dma_fd, struct pfn_list *pfn_list);
 #ifdef __cplusplus
 }
 #endif

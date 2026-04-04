@@ -34,14 +34,12 @@ int vmem_init(uint32_t addr_domain,
     return 0;
 }
 
-int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_id, struct pfn_list *pfn_list) {
+int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, struct pfn_list *pfn_list) {
     printf("domain %04x, bus %02x, device %02x, function %x\n",
            domain, bus, device, function);
     // pass handle to kernel
     struct open_handle_data data = {
         .ipc_handle = *handle,
-        .rank = rank,
-        .device_id = device_id,
         .domain = domain,
         .bus = bus,
         .device = device,
@@ -52,12 +50,12 @@ int vmem_open_handle(int fd, ze_ipc_mem_handle_t* handle, int rank, int device_i
         return -1;
     }
     for (int i = 0; i < 8; i++) {
-        printf("rank %d device_id %d received phys addr %llx\n", rank, device_id, data.pfn_list.addrs[i]);
+        printf("received phys addr %llx\n", data.pfn_list.addrs[i]);
     }
     memcpy(pfn_list, &data.pfn_list, sizeof(data.pfn_list));
     return 0;
 }
-int vmem_get_handle(int fd, int *dma_fd, int rank, struct pfn_list *pfn_list) {
+int vmem_get_handle(int fd, int *dma_fd, struct pfn_list *pfn_list) {
     // Kernel returns dma addresses directly; do not add fixed BAR offsets here.
     struct open_handle_data data = {0};
     memcpy(data.pfn_list.addrs, pfn_list->addrs, sizeof(data.pfn_list.addrs));
@@ -69,6 +67,6 @@ int vmem_get_handle(int fd, int *dma_fd, int rank, struct pfn_list *pfn_list) {
     }
 
     *dma_fd = data.fd;
-    printf("rank %d got dma_buf_fd %d from kernel\n", rank, *dma_fd);
+    printf("got dma_buf_fd %d from kernel\n", *dma_fd);
     return fd;
 }

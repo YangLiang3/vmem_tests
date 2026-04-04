@@ -236,8 +236,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             struct open_handle_data local_data;
             if (copy_from_user(&local_data, (struct open_handle_data __user *)arg, sizeof(struct open_handle_data)))
                 return -EFAULT;
-            printk(KERN_INFO "vmem ioctl received fd: %d, rank: %d, device_id: %x, dbdf: %04x:%02x:%02x.%x\n",
-                   local_data.ipc_handle.data[0], local_data.rank, local_data.device_id,
+            printk(KERN_INFO "vmem ioctl received fd: %d, dbdf: %04x:%02x:%02x.%x\n",
+                   local_data.ipc_handle.data[0],
                    local_data.domain, local_data.bus, local_data.device, local_data.function);
 
             int fd = local_data.ipc_handle.data[0]; // or however the fd is passed
@@ -270,28 +270,21 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                         func == local_data.function) {
                         pdev = vmem_pdevs[i];
                         vmem_log(&pdev->dev,
-                                 "Found matching pre-registered device for rank %d and dbdf %04x:%02x:%02x.%x\n",
-                                 local_data.rank, local_data.domain, local_data.bus,
+                                 "Found matching pre-registered device for dbdf %04x:%02x:%02x.%x\n",
+                                 local_data.domain, local_data.bus,
                                  local_data.device, local_data.function);
                         break;
                     }
                 }
-                // Fallback to rank-based modulo selection for asymmetric node topologies.
-                if (!pdev) {
-                    int selected_idx = local_data.rank % vmem_pdev_count;
-                    pdev = vmem_pdevs[selected_idx];
-                    vmem_log(&pdev->dev,
-                             "Fallback selected device index %d for rank %d\n",
-                             selected_idx, local_data.rank);
-                }
             }
 
             if (!pdev) {
-                printk(KERN_ERR "vmem: No device found for rank %d\n", local_data.rank);
+                printk(KERN_ERR "vmem: No device found for dbdf %04x:%02x:%02x.%x\n",
+                       local_data.domain, local_data.bus, local_data.device, local_data.function);
                 dma_buf_put(dmabuf);
                 return -ENODEV;
             } else {
-                vmem_log(&pdev->dev, "Trying pre-found GPU pci device for rank %d\n", local_data.rank);
+                vmem_log(&pdev->dev, "Trying pre-found GPU pci device\n");
                 
                 attach = dma_buf_dynamic_attach(dmabuf, &pdev->dev, &vmem_attach_ops, NULL);
                 if (!IS_ERR(attach)) {
@@ -360,8 +353,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 phys_addr_t dma_addr = sg_dma_address(sg);
                 phys_addr_t translated_dma_addr = dma_addr;
                 unsigned int offset = sg->offset;
-                vmem_log(&pdev->dev, "[rank %d] sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
-                       local_data.rank,
+                vmem_log(&pdev->dev, "sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
                        i, &phys, len, &dma_addr, offset);
 
                 if (vmem_translate_bar_dma_addr(dma_addr, &translated_dma_addr)) {
@@ -374,8 +366,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 if (i < ARRAY_SIZE(local_data.pfn_list.addrs)) {
                     local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
-                    vmem_log(&pdev->dev, "Calculated P2P addr for rank %d: %llx (dma_addr %pa)\n",
-                             local_data.rank, local_data.pfn_list.addrs[i], &dma_addr);
+                    vmem_log(&pdev->dev, "Calculated P2P addr: %llx (dma_addr %pa)\n",
+                             local_data.pfn_list.addrs[i], &dma_addr);
                 }
             }
             local_data.pfn_list.nents = export_nents;

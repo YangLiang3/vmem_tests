@@ -27,8 +27,6 @@ struct pfn_list {
 
 struct open_handle_data {
     ze_ipc_mem_handle_t ipc_handle;
-    int rank;
-    int device_id;
     uint32_t domain;
     uint32_t bus;
     uint32_t device;
