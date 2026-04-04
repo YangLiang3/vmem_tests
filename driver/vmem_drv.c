@@ -95,6 +95,16 @@ static const struct dma_buf_attach_ops vmem_attach_ops = {
     .move_notify = vmem_move_notify,
 };
 
+static bool vmem_validate_pfn_list(const struct pfn_list *list)
+{
+    int max_nents = (int)ARRAY_SIZE(list->addrs);
+
+    if (list->nents <= 0 || list->nents > max_nents)
+        return false;
+
+    return true;
+}
+
 struct vmem_dmabuf_priv {
     struct sg_table *sgt;
     // We store the raw physical address list directly in private data
@@ -361,7 +371,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                     dma_addr = translated_dma_addr;
                 }
 
-                if (i < 8) {
+                if (i < ARRAY_SIZE(local_data.pfn_list.addrs)) {
                     local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
                     vmem_log(&pdev->dev, "Calculated P2P addr for rank %d: %llx (dma_addr %pa)\n",
@@ -393,6 +403,11 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
             if (copy_from_user(&local_data, (struct open_handle_data __user *)arg, sizeof(struct open_handle_data)))
                 return -EFAULT;
+
+            if (!vmem_validate_pfn_list(&local_data.pfn_list)) {
+                printk(KERN_ERR "vmem: invalid pfn_list.nents=%d\n", local_data.pfn_list.nents);
+                return -EINVAL;
+            }
 
             priv = kzalloc(sizeof(*priv), GFP_KERNEL);
             if (!priv)
