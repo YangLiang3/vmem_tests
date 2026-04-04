@@ -1,6 +1,16 @@
 #ifndef VMEM_LIB_H
 #define VMEM_LIB_H
+#if defined(__has_include)
+#if __has_include(<ze_api.h>)
 #include <ze_api.h>
+#elif __has_include(<level_zero/ze_api.h>)
+#include <level_zero/ze_api.h>
+#else
+#error "Level Zero header not found: expected ze_api.h or level_zero/ze_api.h"
+#endif
+#else
+#include <level_zero/ze_api.h>
+#endif
 #include "vmem_ioctl.h"
 
 #ifdef __cplusplus
