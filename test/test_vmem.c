@@ -221,7 +221,7 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
 
     struct pfn_list local_pfn_list = {0};    
     struct pfn_list remote_pfn_list = {0};    
-    vmem_open_handle(vmem_open(), &local_ipc_handle, rank, device_id, &local_pfn_list);
+    vmem_open_handle(vmem_open(), &local_ipc_handle, &local_pfn_list);
  
     memcpy(&local_dma_fd, &local_ipc_handle, sizeof(local_dma_fd));
     send_data.pid = getpid();
@@ -260,7 +260,7 @@ static int get_remote_buf_ptr(ze_device_handle_t *device,
 
     int fd;
     memcpy(&remote_pfn_list, &recv_data.pfn_list, sizeof(remote_pfn_list));
-    vmem_get_handle(vmem_open(), &fd, rank, &remote_pfn_list);
+    vmem_get_handle(vmem_open(), &fd, &remote_pfn_list);
     memcpy(&remote_ipc_handle, &fd, sizeof(fd));
     printf("Rank %d new fd for remote ipc handle: %d\n", rank, remote_ipc_handle.data[0]);
 
