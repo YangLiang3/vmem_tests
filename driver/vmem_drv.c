@@ -322,6 +322,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 long err = PTR_ERR(sgt);
                 printk(KERN_ERR "Failed to map dma_buf attachment: %ld\n", err);
                 dma_buf_detach(dmabuf, attach);
+                pci_dev_put(pdev);
                 dma_buf_put(dmabuf);
                 return err;
             }
@@ -336,6 +337,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
                 dma_resv_unlock(dmabuf->resv);
                 dma_buf_detach(dmabuf, attach);
+                pci_dev_put(pdev);
                 dma_buf_put(dmabuf);
                 return -ENODATA;
             }
@@ -355,14 +357,14 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 unsigned int offset = sg->offset;
                 vmem_log(&pdev->dev, "sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
                        i, &phys, len, &dma_addr, offset);
-
+#if 0
                 if (vmem_translate_bar_dma_addr(dma_addr, &translated_dma_addr)) {
                     vmem_log(&pdev->dev,
                              "Translated dma_addr from %pa to %pa by range mapping\n",
                              &dma_addr, &translated_dma_addr);
                     dma_addr = translated_dma_addr;
                 }
-
+#endif
                 if (i < ARRAY_SIZE(local_data.pfn_list.addrs)) {
                     local_data.pfn_list.addrs[i] = dma_addr;
                     local_data.pfn_list.size[i] = len;
@@ -376,6 +378,7 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
             dma_resv_unlock(dmabuf->resv);
             dma_buf_detach(dmabuf, attach);
+            pci_dev_put(pdev);
             dma_buf_put(dmabuf);
 
             if (copy_to_user((struct open_handle_data __user *)arg, &local_data, sizeof(struct open_handle_data)))
