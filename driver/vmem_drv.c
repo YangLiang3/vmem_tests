@@ -142,48 +142,42 @@ static struct sg_table *vmem_map_dma_buf(struct dma_buf_attachment *attachment,
     for (i = 0; i < priv->pfn_list.nents; i++) {
         if (!dst_sg) break;
         
-        // 1. Set length/offset from our stored list 
         dst_sg->offset = 0; 
         dst_sg->length = priv->pfn_list.size[i];
 #ifdef CONFIG_NEED_SG_DMA_LENGTH
         dst_sg->dma_length = priv->pfn_list.size[i];
 #endif
-        
-        // We might want to set a dummy page to avoid iterators crashing.
-        // For P2P resources (MMIO/LMEM), there might not be a valid struct page.
-        // However, many importers assume sg_page(sg) is valid.
-        // Ideally we should use PFN_DOWN(phys_addr) if it's system memory, 
-        // but for BARs valid struct page might not exist.
-        // Leaving page NULL is risky if importers dereference it. 
-        // Some drivers set it to a dummy page or use pfn_to_page if appropriate.
-        // Here we rely on the importer understanding dma_address is key.
 
-        dma_addr_t dma_addr = dma_map_resource(attachment->dev, 
-                                               priv->pfn_list.addrs[i], 
-                                               priv->pfn_list.size[i], 
-                                               dir, 
-                                               DMA_ATTR_SKIP_CPU_SYNC);
-        
-        if (dma_mapping_error(attachment->dev, dma_addr)) {
-            printk(KERN_ERR "vmem: failed to map resource for P2P\n");
-            sg_free_table(sgt);
-            kfree(sgt);
-            return ERR_PTR(-ENOMEM);
-        }
-
-        sg_dma_address(dst_sg) = dma_addr;
+        /*
+         * For P2P through a PCIe switch, set the DMA address directly to the
+         * physical bus address of the remote GPU BAR.  The importing GPU can
+         * issue PCIe transactions to this address through the switch without
+         * IOMMU translation.
+         *
+         * We intentionally bypass dma_map_resource() here because:
+         * 1. The DMA/IOMMU layer may not correctly handle cross-node P2P BAR
+         *    addresses (addresses belonging to a remote device reachable only
+         *    through the PCIe switch).
+         * 2. For P2P between GPUs on the same switch fabric, the bus address
+         *    IS the DMA address — no IOMMU mapping is required.
+         *
+         * Also set sg_page to ZERO_PAGE as a safety measure — some importers
+         * (e.g., GPU KMD) may dereference sg_page() for internal bookkeeping
+         * even though only sg_dma_address() is meaningful for device access.
+         */
+        sg_set_page(dst_sg, ZERO_PAGE(0), priv->pfn_list.size[i], 0);
+        sg_dma_address(dst_sg) = (dma_addr_t)priv->pfn_list.addrs[i];
         sg_dma_len(dst_sg) = priv->pfn_list.size[i];
 
         if (dev_is_pci(attachment->dev)) {
-             vmem_log(attachment->dev, "mapped resource P2P: phys=%llx len=%zu dma=%llx\n", 
-                priv->pfn_list.addrs[i], priv->pfn_list.size[i], dma_addr);
+             vmem_log(attachment->dev, "P2P direct map: phys=%llx len=%zu\n", 
+                priv->pfn_list.addrs[i], priv->pfn_list.size[i]);
         }
 
         dst_sg = sg_next(dst_sg);
     }
 
     sgt->nents = priv->pfn_list.nents; 
-    ret = 0; 
 
     return sgt;
 }
@@ -193,18 +187,10 @@ static void vmem_unmap_dma_buf(struct dma_buf_attachment *attachment,
                                  enum dma_data_direction dir)
 {
     vmem_log(attachment->dev, "vmem_unmap_dma_buf\n");
-    // We used dma_map_resource, so theoretically we should use dma_unmap_resource.
-    // However, dma_unmap_sgtable usually calls dma_unmap_sg... which expects normal mappings.
-    // Since we manually constructed this, we should manually iterate and unmap if we want to be 100% correct,
-    // or rely on dma_unmap_resource loops.
-    // Standard dma_unmap_sgtable might NOT work correctly if we mixed dma_map_resource manually.
-    
-    struct scatterlist *sg;
-    int i;
-    for_each_sg(sgt->sgl, sg, sgt->nents, i) {
-         dma_unmap_resource(attachment->dev, sg_dma_address(sg), sg_dma_len(sg), dir, DMA_ATTR_SKIP_CPU_SYNC);
-    }
-    
+    /*
+     * Since we set sg_dma_address directly (bypassing dma_map_resource),
+     * there is no IOMMU/DMA mapping to tear down.  Just free the sg_table.
+     */
     sg_free_table(sgt);
     kfree(sgt);
 }
