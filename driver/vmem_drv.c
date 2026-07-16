@@ -23,43 +23,20 @@ static struct class *vmem_class;
 static char vmem_buf[VMEM_BUF_SIZE];
 
 #define MAX_VMEM_DEVICES 128
+
+/* Fixed BAR layout for the test GPUs on this server.
+ * These describe where each GPU's VRAM BAR is physically mapped.
+ * Used to validate that sg_dma_address() values fall in expected ranges.
+ */
+#define VMEM_BAR_4A8_BASE    0x4a800000000ULL
+#define VMEM_BAR_4A8_WINDOW  0x1000000000ULL
+#define VMEM_BAR_4A8_TARGET  0x201000000000ULL
+
+#define VMEM_BAR_490_BASE    0x49000000000ULL
+#define VMEM_BAR_490_WINDOW  0x1000000000ULL
+#define VMEM_BAR_490_TARGET  0x201800000000ULL
 static struct pci_dev *vmem_pdevs[MAX_VMEM_DEVICES];
 static int vmem_pdev_count = 0;
-
-#define VMEM_BAR_4A8_BASE       0x4a800000000ULL
-#define VMEM_BAR_4A8_WINDOW     0x1000000000ULL
-#define VMEM_BAR_4A8_TARGET     0x201000000000ULL
-
-#define VMEM_BAR_490_BASE       0x49000000000ULL
-#define VMEM_BAR_490_WINDOW     0x1000000000ULL
-#define VMEM_BAR_490_TARGET     0x201800000000ULL
-
-static bool vmem_translate_bar_dma_addr(phys_addr_t dma_addr,
-                                        phys_addr_t *translated_addr)
-{
-    if (dma_addr >= VMEM_BAR_4A8_BASE &&
-        dma_addr < VMEM_BAR_4A8_BASE + VMEM_BAR_4A8_WINDOW) {
-        *translated_addr = VMEM_BAR_4A8_TARGET + (dma_addr - VMEM_BAR_4A8_BASE);
-        return true;
-    }
-
-    if (dma_addr >= VMEM_BAR_490_BASE &&
-        dma_addr < VMEM_BAR_490_BASE + VMEM_BAR_490_WINDOW) {
-        *translated_addr = VMEM_BAR_490_TARGET + (dma_addr - VMEM_BAR_490_BASE);
-        return true;
-    }
-
-    printk(KERN_WARNING
-           "vmem: translate miss dma_addr=%pa;"
-           " 4a8=[0x%llx,0x%llx) 490=[0x%llx,0x%llx)\n",
-           &dma_addr,
-           (u64)VMEM_BAR_4A8_BASE,
-           (u64)(VMEM_BAR_4A8_BASE + VMEM_BAR_4A8_WINDOW),
-           (u64)VMEM_BAR_490_BASE,
-           (u64)(VMEM_BAR_490_BASE + VMEM_BAR_490_WINDOW));
-
-    return false;
-}
 
 
 static int vmem_open(struct inode *inode, struct file *file) {
@@ -281,30 +258,17 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
                 }
             }
 
-            uint64_t bar2_start = 0;
-            if(pdev) {
-                struct resource *res = &pdev->resource[2];
-                bar2_start = res->start;
-                vmem_log(&pdev->dev, "Device BAR2 resource: start=%pa\n", &bar2_start);
-                
-            }
-
             // At this point, pdev and attach are valid.
 
             // Lock the reservation object before mapping
             dma_resv_lock(dmabuf->resv, NULL);
-            
-            // Try to map the attachment.
-            // Note: Some drivers might require dma_buf_pin(attach) before mapping if they don't support dynamic mapping fully, 
-            // but for dynamic attachments, map should handle it or fail if not pinned.
-            // If -ENOMEM (-12) persists, it might be due to memory fragmentation or limits.
             sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
-            
             dma_resv_unlock(dmabuf->resv);
 
             if (IS_ERR(sgt)) {
                 long err = PTR_ERR(sgt);
-                printk(KERN_ERR "Failed to map dma_buf attachment: %ld\n", err);
+                printk(KERN_ERR "Failed to map dma_buf attachment: %ld
+", err);
                 dma_buf_detach(dmabuf, attach);
                 dma_buf_put(dmabuf);
                 return err;
@@ -314,7 +278,8 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             int i = 0;
             sgt_nents = sgt->nents ? sgt->nents : sgt->orig_nents;
             if (sgt_nents <= 0) {
-                printk(KERN_ERR "vmem: mapped sg table is empty (nents=%d, orig_nents=%d)\n",
+                printk(KERN_ERR "vmem: mapped sg table is empty (nents=%d, orig_nents=%d)
+",
                        sgt->nents, sgt->orig_nents);
                 dma_resv_lock(dmabuf->resv, NULL);
                 dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
@@ -327,32 +292,33 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             export_nents = min_t(int, sgt_nents,
                                  (int)ARRAY_SIZE(local_data.pfn_list.addrs));
             if (export_nents < sgt_nents) {
-                printk(KERN_WARNING "vmem: truncating sg entries from %d to %d\n",
+                printk(KERN_WARNING "vmem: truncating sg entries from %d to %d
+",
                        sgt_nents, export_nents);
             }
-            // Iterate and print scatter list info
+
+            /*
+             * Pass the raw DMA addresses from the origin GPU sg_table directly
+             * to the caller.  No address translation is performed here; the
+             * physical-address remapping (if required) is the responsibility of
+             * user-space or the peer node.
+             */
             for_each_sg(sgt->sgl, sg, export_nents, i) {
-                phys_addr_t phys = sg_phys(sg);
-                size_t len = sg->length;
                 phys_addr_t dma_addr = sg_dma_address(sg);
-                phys_addr_t translated_dma_addr = dma_addr;
-                unsigned int offset = sg->offset;
-                vmem_log(&pdev->dev, "sg->nents %d: phys %pa, len %zu, dma_addr %pa, offset %u\n",
-                       i, &phys, len, &dma_addr, offset);
+                size_t len = sg_dma_len(sg);
 
-                if (vmem_translate_bar_dma_addr(dma_addr, &translated_dma_addr)) {
-                    vmem_log(&pdev->dev,
-                             "Translated dma_addr from %pa to %pa by range mapping\n",
-                             &dma_addr, &translated_dma_addr);
-                    dma_addr = translated_dma_addr;
-                }
-
-                if (i < ARRAY_SIZE(local_data.pfn_list.addrs)) {
-                    local_data.pfn_list.addrs[i] = dma_addr;
-                    local_data.pfn_list.size[i] = len;
-                    vmem_log(&pdev->dev, "Calculated P2P addr: %llx (dma_addr %pa)\n",
-                             local_data.pfn_list.addrs[i], &dma_addr);
-                }
+                local_data.pfn_list.addrs[i] = dma_addr;
+                local_data.pfn_list.size[i] = len;
+                vmem_log(&pdev->dev, "sg[%d]: dma_addr=%pa len=%zu
+",
+                         i, &dma_addr, len);
+                if (!((dma_addr >= VMEM_BAR_4A8_BASE &&
+                       dma_addr <  VMEM_BAR_4A8_BASE + VMEM_BAR_4A8_WINDOW) ||
+                      (dma_addr >= VMEM_BAR_490_BASE &&
+                       dma_addr <  VMEM_BAR_490_BASE + VMEM_BAR_490_WINDOW)))
+                    printk(KERN_WARNING "vmem: sg[%d] dma_addr=%pa outside known GPU BARs
+",
+                           i, &dma_addr);
             }
             local_data.pfn_list.nents = export_nents;
 
