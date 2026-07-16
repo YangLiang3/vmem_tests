@@ -28,8 +28,8 @@ static char vmem_buf[VMEM_BUF_SIZE];
  * These describe where each GPU's VRAM BAR is physically mapped.
  * Used to validate that sg_dma_address() values fall in expected ranges.
  */
-#define VMEM_BAR_4A8_BASE    0x4a800000000ULL
-#define VMEM_BAR_4A8_WINDOW  0x1000000000ULL
+#define VMEM_BAR_4A8_BASE    0x22f000000000ULL  /* GPU 39:00.0 BAR2 start (lspci/sysfs) */
+#define VMEM_BAR_4A8_WINDOW  0x800000000ULL     /* 32 GiB (e211 BAR2 size) */
 #define VMEM_BAR_4A8_TARGET  0x201000000000ULL
 
 #define VMEM_BAR_490_BASE    0x49000000000ULL
