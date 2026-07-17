@@ -355,7 +355,28 @@ static long vmem_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
             if (!priv)
                 return -ENOMEM;
 
-            // Store the pfn_list directly in private data
+            /*
+             * Translate the received raw PFNs (origin GPU BAR addresses) to the
+             * local peer-visible physical addresses using this node's BAR->TARGET
+             * mapping.  This is the PA calculation step:
+             *   VMEM_BAR_4A8_BASE + offset  ->  VMEM_BAR_4A8_TARGET + offset
+             *   VMEM_BAR_490_BASE + offset  ->  VMEM_BAR_490_TARGET + offset
+             */
+            for (int i = 0; i < local_data.pfn_list.nents; i++) {
+                phys_addr_t orig = (phys_addr_t)local_data.pfn_list.addrs[i];
+                phys_addr_t translated = orig;
+                if (vmem_translate_bar_dma_addr(orig, &translated)) {
+                    printk(KERN_INFO "vmem: GET_IPC_HANDLE addr[%d]: %pa -> %pa\n",
+                           i, &orig, &translated);
+                    local_data.pfn_list.addrs[i] = (unsigned long long)translated;
+                } else {
+                    printk(KERN_WARNING
+                           "vmem: GET_IPC_HANDLE addr[%d]=%pa outside known BAR ranges\n",
+                           i, &orig);
+                }
+            }
+
+            // Store the translated PA list in private data
             memcpy(&priv->pfn_list, &local_data.pfn_list, sizeof(struct pfn_list));
 
             // No need to allocate sg_table here anymore since we construct it in map_dma_buf
