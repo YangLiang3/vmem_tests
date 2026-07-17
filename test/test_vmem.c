@@ -313,10 +313,11 @@ int main(int argc, char *argv[])
     }
  
     printf("MPI rank %d, size :%d\n", rank, rank_size);
-    int cur_dev_id = rank;
-
     l0_init(0, &device_count, &devices);
-    ERR_CHECK_AND_PRINT(device_count < 2, "Requires at least 2 devices, found %u", device_count);
+    ERR_CHECK_AND_PRINT(device_count < 1, "Requires at least 1 device, found %u", device_count);
+    /* Use rank as device index when multiple GPUs present (local mode),
+     * fall back to device 0 for cross-node (one GPU per node). */
+    int cur_dev_id = (device_count >= 2) ? rank : 0;
  
     l0_event_pool_create(1, &event_pool);
     l0_event_create(event_pool, 0, &event);
@@ -346,14 +347,10 @@ int main(int argc, char *argv[])
     l0_memcpy(send_buf, send_cpu_buf, bytes, cl1);
     l0_memcpy(recv_buf, recv_cpu_buf, bytes, cl1);
 
-    if (rank == 0) {
-        printf("wait gdb attach to process %d\n", getpid());
-        getchar();
-    }
- 
+
     MPI_Barrier(MPI_COMM_WORLD);
   
-    get_remote_buf_ptr(&devices[rank], recv_buf, &peer_recv_ptr, rank);
+    get_remote_buf_ptr(&devices[cur_dev_id], recv_buf, &peer_recv_ptr, rank);
     printf("Rank %d peer_recv_ptr %p,send_buf:%p\n", rank, (void *)peer_recv_ptr, (void *)send_buf);
  
     int copied_data = send_cpu_buf[0];
@@ -393,6 +390,7 @@ int main(int argc, char *argv[])
     // }
     free(send_cpu_buf);
     free(recv_cpu_buf);
+    MPI_Finalize();
     return 0;
 }
  
