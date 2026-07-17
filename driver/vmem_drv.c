@@ -38,6 +38,32 @@ static char vmem_buf[VMEM_BUF_SIZE];
 static struct pci_dev *vmem_pdevs[MAX_VMEM_DEVICES];
 static int vmem_pdev_count = 0;
 
+static bool vmem_translate_bar_dma_addr(phys_addr_t dma_addr,
+                                        phys_addr_t *translated_addr)
+{
+    if (dma_addr >= VMEM_BAR_4A8_BASE &&
+        dma_addr < VMEM_BAR_4A8_BASE + VMEM_BAR_4A8_WINDOW) {
+        *translated_addr = VMEM_BAR_4A8_TARGET + (dma_addr - VMEM_BAR_4A8_BASE);
+        return true;
+    }
+
+    if (dma_addr >= VMEM_BAR_490_BASE &&
+        dma_addr < VMEM_BAR_490_BASE + VMEM_BAR_490_WINDOW) {
+        *translated_addr = VMEM_BAR_490_TARGET + (dma_addr - VMEM_BAR_490_BASE);
+        return true;
+    }
+
+    printk(KERN_WARNING
+           "vmem: translate miss dma_addr=%pa;"
+           " 4a8=[0x%llx,0x%llx) 490=[0x%llx,0x%llx)\n",
+           &dma_addr,
+           (u64)VMEM_BAR_4A8_BASE,
+           (u64)(VMEM_BAR_4A8_BASE + VMEM_BAR_4A8_WINDOW),
+           (u64)VMEM_BAR_490_BASE,
+           (u64)(VMEM_BAR_490_BASE + VMEM_BAR_490_WINDOW));
+
+    return false;
+}
 
 static int vmem_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "vmem device opened\n");
