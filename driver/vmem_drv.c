@@ -465,6 +465,28 @@ static int __init vmem_init(void) {
     device_create(vmem_class, NULL, vmem_dev, NULL, VMEM_DEV_NAME);
     
     // Find all matching devices
+    while ((pdev = pci_get_device(0x8086, 0xe223, pdev))) {
+        if (vmem_pdev_count < MAX_VMEM_DEVICES) {
+            // Take an extra reference because pci_get_device will decrement it when passed to next call
+            // OR simply: pci_dev_get(pdev);
+            // Wait, if I pass pdev to next iteration, pci_get_function puts it. 
+            // So if I want to hoard them, I must pci_dev_get(pdev) before continuing loop?
+            // Actually, simply doing pci_dev_get(pdev) stores a reference for us.
+            pci_dev_get(pdev);
+            vmem_pdevs[vmem_pdev_count++] = pdev;
+            vmem_log(&pdev->dev, "Found GPU pci device [%d] at %04x:%02x:%02x.%x\n",
+                     vmem_pdev_count - 1, pci_domain_nr(pdev->bus), pdev->bus->number,
+                     PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
+        } else {
+             printk(KERN_WARNING "vmem: Too many devices found, ignoring extra\n");
+             // Don't break, let loop finish to properly refcount the current pdev that would be put by next call? 
+             // If I break here, pdev (current) has refcount +1. Correct. 
+             // But if I CONTINUE, pci_get_device puts it. 
+             // So if I want to stop storing but continue iterating... wait, if I want to stop, I just break and put the current one.
+            //  pci_dev_put(pdev);
+             break;
+        }
+    }
     while ((pdev = pci_get_device(0x8086, 0xe211, pdev))) {
         if (vmem_pdev_count < MAX_VMEM_DEVICES) {
             // Take an extra reference because pci_get_device will decrement it when passed to next call
